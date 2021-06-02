@@ -1,20 +1,24 @@
 import { Gpio } from 'onoff'
 
+function avg(values: number[]) {
+  return values.reduce((pre, cur) => pre + cur) / values.length
+}
+
 export class HX711 {
   private clockGpio: Gpio
   private dataGpio: Gpio
-  private minMs = 10
-  private lastRead = 0
   private isReading = false
 
   constructor(
     public clockPin: number,
     public dataPin: number,
     public gain: 128 | 64 | 32 = 128,
-    public tareOffset = 0
+    public scale = 1,
+    public offset = 0
   ) {
     this.clockGpio = new Gpio(clockPin, 'out')
-    this.dataGpio = new Gpio(dataPin, 'in', 'falling')
+    this.dataGpio = new Gpio(dataPin, 'in', 'both')
+    this.powerUp()
   }
 
   get gainBits() {
@@ -22,53 +26,77 @@ export class HX711 {
   }
 
   get isReady() {
-    return new Date().valueOf() - this.lastRead >= this.minMs && !this.isReading
+    return this.dataGpio.readSync() == 0 && !this.isReading
   }
 
   private readBit() {
     this.clockGpio.writeSync(1)
+    const value = this.dataGpio.readSync()
     this.clockGpio.writeSync(0)
+    return value
+  }
 
-    return this.dataGpio.readSync()
+  private pulse(times: number) {
+    let value = 0
+    for (let i = 0; i < times; i++) {
+      value <<= 1
+      value |= this.readBit()
+    }
+    return value
   }
 
   private readByte() {
-    let byte = 0
-
-    for (let i = 0; i < 8; i++) {
-      byte <<= 1
-      byte |= this.readBit()
-    }
-
-    return byte
+    return this.pulse(8)
   }
 
   private readRawBytes() {
-    if (!this.isReady) return
-
+    while (!this.isReady) {}
     this.isReading = true
-
+    // read three bytes (32 bits)
     const byte1 = this.readByte()
     const byte2 = this.readByte()
     const byte3 = this.readByte()
-
+    // set gain bits for next reading
     for (let i = 0; i < this.gainBits; i++) {
       this.readByte()
     }
-
     this.isReading = false
-
     return [byte1, byte2, byte3]
   }
 
-  public read() {
+  private readRaw() {
     const bytes = this.readRawBytes()
-    const tcv = (bytes[0] << 16) | (bytes[1] << 8) | bytes[2]
-    return -(tcv & 0x800000) + (tcv & 0x7fffff) - this.tareOffset
+    const filter = bytes[0] & 0x80 ? 0xff : 0x00
+    const value = (filter << 24) | (bytes[0] << 16) | (bytes[1] << 8) | bytes[2]
+    return value + this.offset
   }
 
-  public tare() {
-    const reading = this.read()
-    this.tareOffset = reading
+  public readRawAvg(times = 10) {
+    const readings: number[] = []
+    for (let i = 0; i < times; i++) {
+      readings.push(this.readRaw())
+    }
+    return avg(readings)
+  }
+
+  public read() {
+    return this.readRaw() / this.scale
+  }
+
+  public readAvg(times = 10) {
+    return this.readRawAvg(times) / this.scale
+  }
+
+  public tare(times = 10) {
+    this.offset = -this.readRawAvg(times)
+  }
+
+  public powerUp() {
+    this.clockGpio.writeSync(0)
+  }
+
+  public powerDown() {
+    this.clockGpio.writeSync(0)
+    this.clockGpio.writeSync(1)
   }
 }
