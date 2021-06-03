@@ -1,6 +1,6 @@
 {
-  "name": "boilerplate-typescript",
-  "version": "1.0.0",
+  "name": "hx711js",
+  "version": "0.1.0",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
